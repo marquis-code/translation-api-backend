@@ -26,7 +26,7 @@ class ConnectionManager:
         """Remove a WebSocket connection"""
         if consultation_id in self.active_connections:
             del self.active_connections[consultation_id]
-        logger.info(f"WebSocket disconnected for consultation {consultation_id}")
+        logger.info(f"WebSocket disconnected for consultation manager {consultation_id}")
         
     async def send_transcript(self, consultation_id: str, transcript_data: dict):
         """Send transcript data to the connected client"""

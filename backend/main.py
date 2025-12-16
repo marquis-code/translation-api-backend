@@ -277,18 +277,21 @@ async def list_consultations(username: str = Depends(verify_token)):
 # -------------------------------------------------------------------
 @app.websocket("/ws/transcribe/{consultation_id}")
 async def websocket_transcribe(websocket: WebSocket, consultation_id: str):
+    print(f"check 1")
     await websocket.accept()
-
+    print(f"check b")
     consultation = consultations_db.get(consultation_id)
     if not consultation:
+        print(f"no confam")
         await websocket.close(code=1008)
         return
-
+    
     try:
         while True:
             # Receive audio bytes
+            print(f"check 2")
             _data = await websocket.receive_bytes()
-
+            print(_data)
             # TODO: Replace with real AssemblyAI streaming in streaming_service.py
             response = {
                 "type": "transcript",
@@ -298,11 +301,11 @@ async def websocket_transcribe(websocket: WebSocket, consultation_id: str):
                 "confidence": 0.95,
                 "is_final": False,
             }
-
+            print(f"check 3")
             await websocket.send_json(response)
 
     except WebSocketDisconnect:
-        print(f"WebSocket disconnected for consultation {consultation_id}")
+        print(f"WebSocket disconnected for consultation main {consultation_id}")
     except Exception as e:
         print(f"WebSocket error: {e}")
         await websocket.close(code=1011)
