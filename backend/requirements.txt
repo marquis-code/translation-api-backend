@@ -4,15 +4,15 @@ uvicorn[standard]==0.32.1
 websockets==14.1
 python-multipart==0.0.12
 
-# Data Validation (CRITICAL: Use pydantic v2.10+ for Python 3.13)
+# Data Validation
 pydantic==2.10.3
 pydantic-core==2.27.1
 
 # Authentication
 PyJWT==2.10.1
 
-# AssemblyAI
-assemblyai==0.37.2
+# AssemblyAI (use latest stable version)
+assemblyai==0.48.3
 
 # Utilities
 python-dotenv==1.0.1
