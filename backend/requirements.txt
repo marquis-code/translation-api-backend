@@ -17,3 +17,7 @@ assemblyai==0.48.3
 # Utilities
 python-dotenv==1.0.1
 requests==2.32.3
+
+deep-translator==1.11.4
+python-jose[cryptography]==3.3.0
+passlib[bcrypt]==1.7.4
