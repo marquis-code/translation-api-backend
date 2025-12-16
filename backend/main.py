@@ -45,10 +45,16 @@ if not PASSWORD_SALT:
 aai.settings.api_key = ASSEMBLYAI_API_KEY
 
 
+# app = FastAPI(
+#     title="Medical Transcription API",
+#     docs_url=None if ENV == "production" else "/docs",
+#     redoc_url=None if ENV == "production" else "/redoc",
+# )
+
 app = FastAPI(
     title="Medical Transcription API",
-    docs_url=None if ENV == "production" else "/docs",
-    redoc_url=None if ENV == "production" else "/redoc",
+    docs_url="/docs",
+    redoc_url="/redoc",
 )
 
 
