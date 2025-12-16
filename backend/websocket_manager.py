@@ -1,4 +1,3 @@
-# backend/websocket_manager.py
 from fastapi import WebSocket
 from typing import Dict, List
 import asyncio
@@ -35,7 +34,6 @@ class ConnectionManager:
             try:
                 await websocket.send_json(transcript_data)
                 
-                # Store in consultation transcript if final
                 if transcript_data.get("is_final", False):
                     self.consultation_transcripts[consultation_id].append({
                         "text": transcript_data["text"],
@@ -71,5 +69,4 @@ class ConnectionManager:
         if consultation_id in self.consultation_transcripts:
             del self.consultation_transcripts[consultation_id]
 
-# Global connection manager instance
 manager = ConnectionManager()

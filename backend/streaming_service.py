@@ -1,5 +1,4 @@
 
-# backend/streaming_service.py
 import assemblyai as aai
 from assemblyai.streaming.v3 import (
     BeginEvent,
@@ -24,8 +23,6 @@ from os import getenv
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 load_dotenv()
-# HARDCODED API KEY
-# HARDCODED_API_KEY = "7f9a4eb77c1d4fc1bfb13561a7ef3f14"
 HARDCODED_API_KEY = getenv("ASSEMBLYAI_API_KEY")
 class AudioStreamSource:
     """Custom audio source that reads from a queue"""
@@ -38,7 +35,6 @@ class AudioStreamSource:
         """Yield audio chunks from the queue"""
         while self.is_active:
             try:
-                # Get audio data with timeout to allow checking is_active
                 audio_chunk = self.audio_queue.get(timeout=0.1)
                 if audio_chunk is not None:
                     yield audio_chunk
@@ -56,7 +52,6 @@ class AudioStreamSource:
     def stop(self):
         """Stop the audio stream"""
         self.is_active = False
-        # Clear the queue
         while not self.audio_queue.empty():
             try:
                 self.audio_queue.get_nowait()
@@ -68,7 +63,6 @@ class TranscriptionService:
     """Real-time transcription service using AssemblyAI Streaming API v3"""
     
     def __init__(self, api_key: str, consultation_id: str):
-        # FORCE USE HARDCODED KEY
         self.api_key = HARDCODED_API_KEY
         
         if not self.api_key or self.api_key.strip() == "":
@@ -93,7 +87,6 @@ class TranscriptionService:
         try:
             logger.info(f"🚀 Creating StreamingClient with key: {self.api_key[:15]}...")
             
-            # Create StreamingClient with v3 API
             self.client = StreamingClient(
                 StreamingClientOptions(
                     api_key=self.api_key,
@@ -101,13 +94,11 @@ class TranscriptionService:
                 )
             )
             
-            # Register event handlers
             self.client.on(StreamingEvents.Begin, self._on_begin)
             self.client.on(StreamingEvents.Turn, self._on_turn)
             self.client.on(StreamingEvents.Termination, self._on_terminated)
             self.client.on(StreamingEvents.Error, self._on_error)
             
-            # Connect to streaming service
             logger.info("🔌 Connecting to AssemblyAI streaming...")
             self.client.connect(
                 StreamingParameters(
@@ -116,10 +107,8 @@ class TranscriptionService:
                 )
             )
             
-            # Create audio source
             self.audio_source = AudioStreamSource()
             
-            # Start streaming in a separate thread
             self.streaming_thread = threading.Thread(
                 target=self._stream_audio,
                 daemon=True
@@ -153,20 +142,17 @@ class TranscriptionService:
         if not event.transcript:
             return
         
-        # Detect speaker
         speaker = self._detect_speaker(event.transcript)
         
-        # Prepare transcript data
         transcript_data = {
             "type": "transcript",
             "text": event.transcript,
             "speaker": speaker,
             "timestamp": datetime.utcnow().isoformat(),
-            "confidence": 0.95,  # v3 API doesn't provide confidence per turn
+            "confidence": 0.95, 
             "is_final": event.end_of_turn,
         }
         
-        # Call the callback
         if self.on_transcript:
             try:
                 self.on_transcript(transcript_data)
@@ -188,7 +174,6 @@ class TranscriptionService:
         logger.error(f"❌ STREAMING ERROR: {error}")
         logger.error(f"Error type: {type(error)}")
         
-        # Check for auth errors
         error_str = str(error).lower()
         if "not authorized" in error_str or "unauthorized" in error_str or "401" in error_str:
             logger.error("=" * 80)

@@ -17,13 +17,11 @@ from dotenv import load_dotenv
 from streaming_service import TranscriptionService, SummaryService
 from websocket_manager import manager
 
-# Configure logging
+
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# -------------------------------------------------------------------
-# ENV / CONFIG
-# -------------------------------------------------------------------
+
 load_dotenv()
 
 ENV = os.getenv("ENV", "development")
@@ -35,7 +33,7 @@ CORS_ORIGINS = os.getenv("CORS_ORIGINS", "")
 ALLOW_ORIGINS = [o.strip() for o in CORS_ORIGINS.split(",") if o.strip()]
 PASSWORD_SALT = os.getenv("PASSWORD_SALT", "")
 
-# Fail fast if critical secrets are missing
+
 if not SECRET_KEY:
     raise RuntimeError("SECRET_KEY is missing. Set it in environment variables.")
 if not ASSEMBLYAI_API_KEY:
@@ -43,31 +41,29 @@ if not ASSEMBLYAI_API_KEY:
 if not PASSWORD_SALT:
     raise RuntimeError("PASSWORD_SALT is missing. Set it in environment variables.")
 
-# AssemblyAI config
+
 aai.settings.api_key = ASSEMBLYAI_API_KEY
 
-# -------------------------------------------------------------------
-# FASTAPI APP
-# -------------------------------------------------------------------
+
 app = FastAPI(
     title="Medical Transcription API",
     docs_url=None if ENV == "production" else "/docs",
     redoc_url=None if ENV == "production" else "/redoc",
 )
 
+
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=ALLOW_ORIGINS if ALLOW_ORIGINS else ["*"],
-    allow_credentials=True,
+    allow_origins=["*"],       
+    allow_credentials=False,    
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
 security = HTTPBearer()
 
-# -------------------------------------------------------------------
-# AUTH / PASSWORD HASHING
-# -------------------------------------------------------------------
+
 def hash_password(password: str) -> str:
     """Hash a password using PBKDF2."""
     salt = PASSWORD_SALT.encode("utf-8")
@@ -103,9 +99,7 @@ def verify_token(credentials: HTTPAuthorizationCredentials = Depends(security)) 
         raise HTTPException(status_code=401, detail="Invalid token")
 
 
-# -------------------------------------------------------------------
-# DEMO DATA (replace with DB in production)
-# -------------------------------------------------------------------
+
 DEMO_PASSWORD_HASH = hash_password("password123")
 
 users_db = {
@@ -120,9 +114,7 @@ users_db = {
 consultations_db: Dict[str, dict] = {}
 transcription_services: Dict[str, TranscriptionService] = {}
 
-# -------------------------------------------------------------------
-# MODELS
-# -------------------------------------------------------------------
+
 class UserLogin(BaseModel):
     username: str
     password: str
@@ -163,12 +155,10 @@ class Consultation(BaseModel):
 
 class TranslationRequest(BaseModel):
     text: str
-    target_language: str  # 'hi', 'en', 'ta', 'id'
+    target_language: str 
 
 
-# -------------------------------------------------------------------
-# ROUTES
-# -------------------------------------------------------------------
+
 @app.get("/")
 async def root():
     return {"message": "Medical Transcription API", "version": "1.0.0", "docs": "/docs"}
@@ -220,7 +210,6 @@ async def get_consultation(consultation_id: str, username: str = Depends(verify_
     if consultation["doctor_id"] != username:
         raise HTTPException(status_code=403, detail="Not authorized")
     
-    # Get latest transcript from manager
     transcript = manager.get_transcript(consultation_id)
     if transcript:
         consultation["transcript"] = transcript
@@ -320,9 +309,6 @@ async def translate_text(request: TranslationRequest, username: str = Depends(ve
         raise HTTPException(status_code=500, detail=f"Translation failed: {str(e)}")
 
 
-# -------------------------------------------------------------------
-# WEBSOCKET FOR REAL-TIME TRANSCRIPTION - FIXED VERSION
-# -------------------------------------------------------------------
 @app.websocket("/ws/transcribe/{consultation_id}")
 async def websocket_transcribe(websocket: WebSocket, consultation_id: str):
     """Handle WebSocket connection for real-time audio streaming and transcription"""
@@ -340,14 +326,14 @@ async def websocket_transcribe(websocket: WebSocket, consultation_id: str):
         await websocket.close(code=1008)
         return
     
-    # Initialize transcription service
+
     transcription_service = TranscriptionService(ASSEMBLYAI_API_KEY, consultation_id)
     transcription_services[consultation_id] = transcription_service
     
-    # CRITICAL FIX: Get the current event loop BEFORE defining the callback
+
     loop = asyncio.get_event_loop()
     
-    # Define callback for transcription updates
+
     def on_transcript(transcript_data):
         """
         Callback to handle transcription updates.
@@ -355,29 +341,24 @@ async def websocket_transcribe(websocket: WebSocket, consultation_id: str):
         to safely schedule the async operation in the main event loop.
         """
         try:
-            # Schedule the coroutine in the main event loop
             future = asyncio.run_coroutine_threadsafe(
                 manager.send_transcript(consultation_id, transcript_data),
                 loop
             )
-            # Optional: wait for completion with timeout
             future.result(timeout=5.0)
         except Exception as e:
             logger.error(f"❌ Error in transcript callback: {e}")
     
-    # Start transcription service
+
     try:
         transcription_service.start(on_transcript)
         await manager.broadcast_status(consultation_id, "connected", "Transcription started")
         logger.info(f"✅ Transcription service started for {consultation_id}")
         
-        # Receive and process audio data
         while True:
             try:
-                # Receive audio bytes from client
                 audio_data = await websocket.receive_bytes()
                 
-                # Send audio to transcription service
                 transcription_service.send_audio(audio_data)
                 
             except WebSocketDisconnect:
@@ -401,7 +382,6 @@ async def websocket_transcribe(websocket: WebSocket, consultation_id: str):
         )
     
     finally:
-        # Cleanup
         logger.info(f"🧹 Cleaning up transcription service for {consultation_id}")
         transcription_service.stop()
         if consultation_id in transcription_services:
@@ -410,9 +390,6 @@ async def websocket_transcribe(websocket: WebSocket, consultation_id: str):
         logger.info(f"✅ Cleanup complete for {consultation_id}")
 
 
-# -------------------------------------------------------------------
-# HEALTH CHECK
-# -------------------------------------------------------------------
 @app.get("/health")
 async def health_check():
     return {
@@ -423,9 +400,6 @@ async def health_check():
     }
 
 
-# -------------------------------------------------------------------
-# LOCAL RUN
-# -------------------------------------------------------------------
 if __name__ == "__main__":
     import uvicorn
     port = int(os.getenv("PORT", "8000"))
