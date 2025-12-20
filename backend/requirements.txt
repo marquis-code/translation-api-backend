@@ -19,10 +19,14 @@ assemblyai==0.48.3
 # Translation
 deep-translator==1.11.4
 
-# Speaker Diarization - THE REAL SOLUTION
+# Pyannote Speaker Diarization
 pyannote.audio==3.1.1
 torch>=2.0.0
 torchaudio>=2.0.0
+
+# Audio Processing
+numpy==1.24.3
+scipy>=1.10.0
 
 # Utilities
 python-dotenv==1.0.1
