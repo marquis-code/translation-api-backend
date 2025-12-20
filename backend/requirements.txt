@@ -10,14 +10,24 @@ pydantic-core==2.27.1
 
 # Authentication
 PyJWT==2.10.1
+python-jose[cryptography]==3.3.0
+passlib[bcrypt]==1.7.4
 
-# AssemblyAI (use latest stable version)
+# AssemblyAI
 assemblyai==0.48.3
+
+# Translation
+deep-translator==1.11.4
+
+# Pyannote Speaker Diarization
+pyannote.audio==3.1.1
+torch==2.2.2
+torchaudio==2.2.2
+
+# Audio Processing
+numpy>=1.24.3,<2.0.0
+scipy>=1.10.0
 
 # Utilities
 python-dotenv==1.0.1
 requests==2.32.3
-
-deep-translator==1.11.4
-python-jose[cryptography]==3.3.0
-passlib[bcrypt]==1.7.4
