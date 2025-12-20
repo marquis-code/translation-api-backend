@@ -49,13 +49,22 @@ class TranscriptionService:
         else:
             try:
                 logger.info("🔄 Loading pyannote speaker diarization model...")
-                self.diarization_pipeline = Pipeline.from_pretrained(
-                    "pyannote/speaker-diarization-3.1",
-                    use_auth_token=HUGGINGFACE_TOKEN
-                )
+                # Try new 'token' parameter first (for newer huggingface_hub versions)
+                try:
+                    self.diarization_pipeline = Pipeline.from_pretrained(
+                        "pyannote/speaker-diarization-3.1",
+                        token=HUGGINGFACE_TOKEN  # New parameter name
+                    )
+                except TypeError:
+                    # Fallback to old 'use_auth_token' parameter
+                    self.diarization_pipeline = Pipeline.from_pretrained(
+                        "pyannote/speaker-diarization-3.1",
+                        use_auth_token=HUGGINGFACE_TOKEN
+                    )
                 logger.info("✅ Pyannote diarization model loaded successfully")
             except Exception as e:
                 logger.error(f"❌ Failed to load pyannote model: {e}")
+                logger.warning("⚠️ Falling back to simple speaker alternation")
                 self.diarization_pipeline = None
         
         self.consultation_id = consultation_id
@@ -72,12 +81,25 @@ class TranscriptionService:
         self.audio_buffer = []  # Buffer for diarization
         self.sample_rate = 16000
         
+        # Turn continuation tracking
+        self.last_turn_time = 0
+        self.last_turn_speaker = None
+        self.last_turn_length = 0
+        self.turn_continuation_window = 2.0  # If next turn comes within 2s, might be same speaker
+        
+        # Turn buffering (to prevent excessive fragmentation)
+        self.turn_buffer = []  # Buffer incomplete turns
+        self.turn_buffer_speaker = None
+        self.turn_buffer_start_time = 0
+        self.buffer_timeout = 1.5  # Send buffered content after 1.5s of silence
+        self.min_turn_length = 15  # Minimum characters before sending (increased from 3)
+        
         # Duplicate prevention - increased capacity
         self.sent_hashes = set()
         self.recent_transcripts = []
         self.max_recent = 50  # Increased buffer
         self.last_processed_time = 0  # Cooldown tracking
-        self.min_time_between_transcripts = 0.5  # Minimum 0.5s between transcripts
+        self.min_time_between_transcripts = 0.3  # Reduced to 0.3s (was too aggressive at 0.5s)
         
         logger.info(f"🔑 TranscriptionService initialized with hybrid diarization")
         
@@ -139,7 +161,100 @@ class TranscriptionService:
         self.session_id = event.id
         logger.info(f"✅ Session started: {event.id}")
     
+    def _is_likely_continuation(self, text: str, current_time: float) -> bool:
+        """
+        Detect if this turn is likely a CONTINUATION of the previous speaker
+        Now works with buffering system
+        """
+        if not self.last_turn_speaker:
+            return False
+        
+        time_since_last = current_time - self.last_turn_time
+        
+        # If it's been more than 4 seconds, probably a new speaker
+        if time_since_last > 4.0:
+            return False
+        
+        # If within continuation window (3 seconds) - extended for buffering
+        if time_since_last <= 3.0:
+            # Check if last turn was suspiciously short (likely cut off)
+            if self.last_turn_length < 40:  # Less than 40 characters
+                logger.info(f"🔄 Likely continuation: last turn was short ({self.last_turn_length} chars) and only {time_since_last:.1f}s ago")
+                return True
+            
+            # Check if current turn is also short (fragment pattern)
+            if len(text) < 50:
+                logger.info(f"🔄 Likely continuation: current turn is short ({len(text)} chars) within {time_since_last:.1f}s")
+                return True
+        
+        return False
+    
     def _detect_speaker_from_audio(self, audio_chunk: bytes) -> str:
+        """
+        Use pyannote.audio to detect speaker from audio chunk
+        Returns 'Doctor' or 'Patient'
+        """
+        if not self.diarization_pipeline:
+            # Fallback: alternate between speakers
+            return self._fallback_speaker_detection()
+        
+        try:
+            # Convert audio bytes to numpy array
+            audio_array = np.frombuffer(audio_chunk, dtype=np.int16).astype(np.float32) / 32768.0
+            
+            # Pyannote expects mono audio
+            if len(audio_array.shape) > 1:
+                audio_array = audio_array.mean(axis=1)
+            
+            # Create a temporary audio structure
+            from pyannote.core import Segment
+            import torch
+            
+            # Convert to torch tensor
+            waveform = torch.from_numpy(audio_array).unsqueeze(0)
+            
+            # Run diarization on this chunk
+            diarization = self.diarization_pipeline({
+                "waveform": waveform, 
+                "sample_rate": self.sample_rate
+            })
+            
+            # Get the most active speaker in this chunk
+            speaker_times = {}
+            for turn, _, speaker in diarization.itertracks(yield_label=True):
+                duration = turn.end - turn.start
+                speaker_times[speaker] = speaker_times.get(speaker, 0) + duration
+            
+            if speaker_times:
+                # Get speaker with most talk time in this chunk
+                active_speaker = max(speaker_times, key=speaker_times.get)
+                return self._assign_speaker_role(active_speaker)
+            
+        except Exception as e:
+            logger.error(f"❌ Diarization error: {e}")
+        
+        return self._fallback_speaker_detection()
+    
+    def _smart_speaker_detection(self, text: str, current_time: float) -> str:
+        """
+        Intelligently detect speaker considering turn continuation patterns
+        """
+        # Check if this is likely a continuation of previous speaker
+        if self._is_likely_continuation(text, current_time):
+            logger.info(f"✅ CONTINUATION: Keeping speaker as {self.last_turn_speaker}")
+            return self.last_turn_speaker
+        
+        # Otherwise, detect speaker normally
+        if len(self.audio_buffer) > 0:
+            # Concatenate recent audio for diarization
+            audio_data = b''.join(self.audio_buffer[-10:])
+            speaker = self._detect_speaker_from_audio(audio_data)
+            logger.info(f"🎯 Detected speaker: {speaker}")
+            return speaker
+        else:
+            speaker = self._fallback_speaker_detection()
+            logger.info(f"🎯 Fallback speaker: {speaker}")
+            return speaker
         """
         Use pyannote.audio to detect speaker from audio chunk
         Returns 'Doctor' or 'Patient'
@@ -187,15 +302,27 @@ class TranscriptionService:
     
     def _fallback_speaker_detection(self) -> str:
         """
-        Improved fallback: Use context clues from text to determine speaker
-        If no context, alternate based on previous speaker
+        Improved fallback: Use context and timing to determine speaker
+        Works with buffering system
         """
-        # If we have recent transcripts, try to be smarter
+        # If we're actively buffering, keep same speaker
+        if self.turn_buffer_speaker:
+            return self.turn_buffer_speaker
+        
+        # If we have recent transcripts, be smart about it
         if len(self.recent_transcripts) > 0:
             last_speaker = self.recent_transcripts[-1][1]
+            last_time = self.recent_transcripts[-1][2]
+            current_time = time.time()
+            time_diff = current_time - last_time
             
-            # Default to alternating speakers
-            # In doctor-patient conversations, they typically take turns
+            # If it's been less than 3 seconds and last turn was short, 
+            # likely same speaker continuing
+            if time_diff < 3.0 and len(self.recent_transcripts[-1][0]) < 50:
+                logger.info(f"🔄 Fallback continuation: Keeping {last_speaker} (short turn + quick follow-up)")
+                return last_speaker
+            
+            # Otherwise, alternate speakers (normal conversation pattern)
             return "Patient" if last_speaker == "Doctor" else "Doctor"
         
         # Very first transcript - assume Doctor speaks first
@@ -390,7 +517,7 @@ class TranscriptionService:
             if t[2] > cutoff_time
         ]
         
-        logger.info(f"✅ APPROVED: [{speaker}] '{text[:60]}' | History: {len(self.recent_transcripts)}")
+        logger.info(f"✅ APPROVED: [{speaker}] '{text[:60]}' | History: {len(self.recent_transcripts)} | Duration: {len(text)} chars")
         
         transcript_data = {
             "type": "transcript",
@@ -438,6 +565,11 @@ class TranscriptionService:
         """Stop service"""
         logger.info("🛑 Stopping...")
         self.is_running = False
+        
+        # Flush any remaining buffered content
+        if self.turn_buffer:
+            logger.info("🟡 Flushing remaining buffer before stop...")
+            self._flush_turn_buffer()
         
         if self.audio_source:
             self.audio_source.stop()
