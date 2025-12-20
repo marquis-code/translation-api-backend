@@ -1,3 +1,37 @@
+# # Core Framework
+# fastapi==0.115.5
+# uvicorn[standard]==0.32.1
+# websockets==14.1
+# python-multipart==0.0.12
+
+# # Data Validation
+# pydantic==2.10.3
+# pydantic-core==2.27.1
+
+# # Authentication
+# PyJWT==2.10.1
+# python-jose[cryptography]==3.3.0
+# passlib[bcrypt]==1.7.4
+
+# # AssemblyAI
+# assemblyai==0.48.3
+
+# # Translation
+# deep-translator==1.11.4
+
+# # Pyannote Speaker Diarization
+# pyannote.audio==3.1.1
+# torch>=2.0.0
+# torchaudio>=2.0.0
+
+# # Audio Processing
+# numpy==1.24.3
+# scipy>=1.10.0
+
+# # Utilities
+# python-dotenv==1.0.1
+# requests==2.32.3
+
 # Core Framework
 fastapi==0.115.5
 uvicorn[standard]==0.32.1
@@ -21,11 +55,11 @@ deep-translator==1.11.4
 
 # Pyannote Speaker Diarization
 pyannote.audio==3.1.1
-torch>=2.0.0
-torchaudio>=2.0.0
+torch>=2.0.0,<2.5.0
+torchaudio>=2.0.0,<2.5.0
 
 # Audio Processing
-numpy==1.24.3
+numpy>=1.24.3,<2.0.0
 scipy>=1.10.0
 
 # Utilities
