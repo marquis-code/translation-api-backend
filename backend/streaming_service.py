@@ -255,6 +255,50 @@ class TranscriptionService:
             speaker = self._fallback_speaker_detection()
             logger.info(f"🎯 Fallback speaker: {speaker}")
             return speaker
+        """
+        Use pyannote.audio to detect speaker from audio chunk
+        Returns 'Doctor' or 'Patient'
+        """
+        if not self.diarization_pipeline:
+            # Fallback: alternate between speakers
+            return self._fallback_speaker_detection()
+        
+        try:
+            # Convert audio bytes to numpy array
+            audio_array = np.frombuffer(audio_chunk, dtype=np.int16).astype(np.float32) / 32768.0
+            
+            # Pyannote expects mono audio
+            if len(audio_array.shape) > 1:
+                audio_array = audio_array.mean(axis=1)
+            
+            # Create a temporary audio structure
+            from pyannote.core import Segment
+            import torch
+            
+            # Convert to torch tensor
+            waveform = torch.from_numpy(audio_array).unsqueeze(0)
+            
+            # Run diarization on this chunk
+            diarization = self.diarization_pipeline({
+                "waveform": waveform, 
+                "sample_rate": self.sample_rate
+            })
+            
+            # Get the most active speaker in this chunk
+            speaker_times = {}
+            for turn, _, speaker in diarization.itertracks(yield_label=True):
+                duration = turn.end - turn.start
+                speaker_times[speaker] = speaker_times.get(speaker, 0) + duration
+            
+            if speaker_times:
+                # Get speaker with most talk time in this chunk
+                active_speaker = max(speaker_times, key=speaker_times.get)
+                return self._assign_speaker_role(active_speaker)
+            
+        except Exception as e:
+            logger.error(f"❌ Diarization error: {e}")
+        
+        return self._fallback_speaker_detection()
     
     def _fallback_speaker_detection(self) -> str:
         """
@@ -473,11 +517,6 @@ class TranscriptionService:
             if t[2] > cutoff_time
         ]
         
-        # Update last turn tracking
-        self.last_turn_time = current_time
-        self.last_turn_speaker = speaker
-        self.last_turn_length = len(text)
-        
         logger.info(f"✅ APPROVED: [{speaker}] '{text[:60]}' | History: {len(self.recent_transcripts)} | Duration: {len(text)} chars")
         
         transcript_data = {
@@ -526,6 +565,11 @@ class TranscriptionService:
         """Stop service"""
         logger.info("🛑 Stopping...")
         self.is_running = False
+        
+        # Flush any remaining buffered content
+        if self.turn_buffer:
+            logger.info("🟡 Flushing remaining buffer before stop...")
+            self._flush_turn_buffer()
         
         if self.audio_source:
             self.audio_source.stop()
@@ -677,3 +721,4 @@ class SummaryService:
                    if any(k in s.get('original_text', s['text']).lower() for k in keywords) 
                    and s['speaker'] == 'Doctor'][:6]
         return f"Follow-up:\n" + "\n".join(relevant) if relevant else "Follow-up: Schedule in 1-2 weeks"
+
