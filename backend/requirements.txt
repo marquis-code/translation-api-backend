@@ -21,8 +21,8 @@ deep-translator==1.11.4
 
 # Pyannote Speaker Diarization
 pyannote.audio==3.1.1
-torch==2.2.2
-torchaudio==2.2.2
+torch>=2.5.0
+torchaudio>=2.5.0
 
 # Audio Processing
 numpy>=1.24.3,<2.0.0
