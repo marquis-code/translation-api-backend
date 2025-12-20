@@ -1,4 +1,3 @@
-
 import assemblyai as aai
 from assemblyai.streaming.v3 import (
     BeginEvent,
