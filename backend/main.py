@@ -12,6 +12,7 @@ import hmac
 import uuid
 import asyncio
 import logging
+from deep_translator import GoogleTranslator
 
 from dotenv import load_dotenv
 from streaming_service import TranscriptionService, SummaryService
@@ -44,12 +45,6 @@ if not PASSWORD_SALT:
 
 aai.settings.api_key = ASSEMBLYAI_API_KEY
 
-
-# app = FastAPI(
-#     title="Medical Transcription API",
-#     docs_url=None if ENV == "production" else "/docs",
-#     redoc_url=None if ENV == "production" else "/redoc",
-# )
 
 app = FastAPI(
     title="Medical Transcription API",
@@ -137,6 +132,8 @@ class TranscriptionSegment(BaseModel):
     speaker: str
     timestamp: str
     confidence: float
+    original_text: Optional[str] = None
+    language: Optional[str] = "en"
 
 
 class ClinicalSummary(BaseModel):
@@ -147,6 +144,7 @@ class ClinicalSummary(BaseModel):
     treatment: str
     advice: str
     next_steps: str
+    language: Optional[str] = "en"
 
 
 class Consultation(BaseModel):
@@ -157,12 +155,40 @@ class Consultation(BaseModel):
     status: str
     created_at: datetime
     completed_at: Optional[datetime]
+    language: Optional[str] = "en"
 
 
 class TranslationRequest(BaseModel):
     text: str
     target_language: str 
 
+
+class StartConsultationRequest(BaseModel):
+    language: Optional[str] = "en"
+
+
+# Language mapping for deep-translator
+LANG_MAP = {
+    'hi': 'hi',  # Hindi
+    'en': 'en',  # English
+    'ta': 'ta',  # Tamil
+    'id': 'id',  # Indonesian (Bahasa)
+}
+
+
+def translate_text_sync(text: str, target_language: str) -> str:
+    """Synchronous translation helper"""
+    if target_language == 'en' or not text.strip():
+        return text
+    
+    try:
+        target = LANG_MAP.get(target_language, 'en')
+        translator = GoogleTranslator(source='auto', target=target)
+        translated = translator.translate(text)
+        return translated
+    except Exception as e:
+        logger.error(f"Translation error: {e}")
+        return text  # Return original on error
 
 
 @app.get("/")
@@ -192,7 +218,10 @@ async def login(user_data: UserLogin):
 
 
 @app.post("/api/consultations/start")
-async def start_consultation(username: str = Depends(verify_token)):
+async def start_consultation(
+    request: StartConsultationRequest = StartConsultationRequest(),
+    username: str = Depends(verify_token)
+):
     consultation_id = str(uuid.uuid4())
     consultation = {
         "id": consultation_id,
@@ -202,10 +231,11 @@ async def start_consultation(username: str = Depends(verify_token)):
         "status": "in_progress",
         "created_at": datetime.utcnow().isoformat(),
         "completed_at": None,
+        "language": request.language or "en",
     }
     consultations_db[consultation_id] = consultation
-    logger.info(f"Started consultation {consultation_id} for {username}")
-    return {"consultation_id": consultation_id}
+    logger.info(f"Started consultation {consultation_id} for {username} with language {request.language}")
+    return {"consultation_id": consultation_id, "language": request.language}
 
 
 @app.get("/api/consultations/{consultation_id}")
@@ -236,10 +266,13 @@ async def generate_summary(consultation_id: str, username: str = Depends(verify_
         raise HTTPException(status_code=400, detail="No transcript available")
 
     try:
+        # Get the language from consultation
+        target_language = consultation.get("language", "en")
+        
         summary_service = SummaryService(ASSEMBLYAI_API_KEY)
-        summary = await summary_service.generate_summary("", transcript_segments)
+        summary = await summary_service.generate_summary("", transcript_segments, target_language)
         consultation["summary"] = summary
-        logger.info(f"Generated summary for consultation {consultation_id}")
+        logger.info(f"Generated summary for consultation {consultation_id} in language {target_language}")
         return {"summary": summary}
     except Exception as e:
         logger.error(f"Error generating summary: {e}")
@@ -290,20 +323,19 @@ async def list_consultations(username: str = Depends(verify_token)):
 async def translate_text(request: TranslationRequest, username: str = Depends(verify_token)):
     """Translate text to target language using deep-translator"""
     try:
-        from deep_translator import GoogleTranslator
+        target = LANG_MAP.get(request.target_language, 'en')
         
-        # Map language codes
-        lang_map = {
-            'hi': 'hi',  # Hindi
-            'en': 'en',  # English
-            'ta': 'ta',  # Tamil
-            'id': 'id',  # Indonesian (Bahasa)
-        }
-        
-        target = lang_map.get(request.target_language, 'en')
+        if target == 'en':
+            return {
+                "original": request.text,
+                "translated": request.text,
+                "target_language": request.target_language
+            }
         
         translator = GoogleTranslator(source='auto', target=target)
         translated = translator.translate(request.text)
+        
+        logger.info(f"Translated '{request.text[:30]}...' to {request.target_language}")
         
         return {
             "original": request.text,
@@ -316,13 +348,17 @@ async def translate_text(request: TranslationRequest, username: str = Depends(ve
 
 
 @app.websocket("/ws/transcribe/{consultation_id}")
-async def websocket_transcribe(websocket: WebSocket, consultation_id: str):
+async def websocket_transcribe(websocket: WebSocket, consultation_id: str, language: str = "en"):
     """Handle WebSocket connection for real-time audio streaming and transcription"""
     
-    # Connect WebSocket
-    await manager.connect(consultation_id, websocket)
-    
+    # Get consultation to check language
     consultation = consultations_db.get(consultation_id)
+    if consultation:
+        language = consultation.get("language", "en")
+    
+    # Connect WebSocket with language
+    await manager.connect(consultation_id, websocket, language)
+    
     if not consultation:
         await manager.broadcast_status(
             consultation_id, 
@@ -342,11 +378,33 @@ async def websocket_transcribe(websocket: WebSocket, consultation_id: str):
 
     def on_transcript(transcript_data):
         """
-        Callback to handle transcription updates.
-        This runs in a different thread, so we use run_coroutine_threadsafe
-        to safely schedule the async operation in the main event loop.
+        Callback to handle transcription updates with translation.
+        This runs in a different thread, so we use run_coroutine_threadsafe.
         """
         try:
+            # Get the target language
+            target_lang = manager.get_language(consultation_id)
+            
+            # Store original text
+            original_text = transcript_data["text"]
+            
+            # Translate if not English
+            if target_lang != "en":
+                try:
+                    translated_text = translate_text_sync(original_text, target_lang)
+                    transcript_data["text"] = translated_text
+                    transcript_data["original_text"] = original_text
+                    transcript_data["language"] = target_lang
+                    logger.info(f"Translated: '{original_text[:30]}...' -> '{translated_text[:30]}...'")
+                except Exception as e:
+                    logger.error(f"Translation failed, using original: {e}")
+                    transcript_data["original_text"] = original_text
+                    transcript_data["language"] = "en"
+            else:
+                transcript_data["original_text"] = original_text
+                transcript_data["language"] = "en"
+            
+            # Send to websocket
             future = asyncio.run_coroutine_threadsafe(
                 manager.send_transcript(consultation_id, transcript_data),
                 loop
@@ -358,8 +416,12 @@ async def websocket_transcribe(websocket: WebSocket, consultation_id: str):
 
     try:
         transcription_service.start(on_transcript)
-        await manager.broadcast_status(consultation_id, "connected", "Transcription started")
-        logger.info(f"✅ Transcription service started for {consultation_id}")
+        await manager.broadcast_status(
+            consultation_id, 
+            "connected", 
+            f"Transcription started with language: {language}"
+        )
+        logger.info(f"✅ Transcription service started for {consultation_id} (language: {language})")
         
         while True:
             try:
