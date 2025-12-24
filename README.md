@@ -1133,6 +1133,4 @@ This POC demonstrates a functional end-to-end medical transcription system optim
 
 **Estimated Timeline:** 6-9 months to production-ready, 12-18 months for nationwide rollout.
 
----
 
-For questions or support, contact: [Your Name] | [Email] | [GitHub]
